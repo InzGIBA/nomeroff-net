@@ -43,7 +43,9 @@ from mcm.mcm import get_mode_torch
 from tools import (fline,
                    distance,
                    linearLineMatrix,
+                   getYByMatrix,
                    findDistances,
+                   rotate,
                    buildPerspective,
                    getCvZoneRGB,
                    getMeanDistance,
@@ -202,9 +204,9 @@ def detectIntersection(matrix1: np.ndarray, matrix2: np.ndarray) -> np.ndarray:
     www.math.by/geometry/eqline.html
     xn--80ahcjeib4ac4d.xn--p1ai/information/solving_systems_of_linear_equations_in_python/
     """
-    X = np.array([matrix1[:2], matrix2[:2]])
+    x = np.array([matrix1[:2], matrix2[:2]])
     y = np.array([matrix1[2], matrix2[2]])
-    return np.linalg.solve(X, y)
+    return np.linalg.solve(x, y)
 
 
 def detectIntersectionNormDD(matrix1: np.ndarray, matrix2: np.ndarray, d1: float, d2: float) -> np.ndarray:
@@ -218,15 +220,6 @@ def detectIntersectionNormDD(matrix1: np.ndarray, matrix2: np.ndarray, d1: float
     return np.linalg.solve(X, y)
 
 
-def getYByMatrix(matrix: List[np.ndarray], x: float) -> np.ndarray:
-    """
-    TODO: describe function
-    """
-    A = matrix[0]
-    B = matrix[1]
-    C = matrix[2]
-    if B != 0:
-        return (C - A * x) / B
 
 
 def detectDistanceFromPointToLine(matrix: List[np.ndarray],
@@ -301,7 +294,7 @@ def order_points_old(pts: np.ndarray) -> Union:
     return rect
 
 
-def fixClockwise2(target_points: list) -> np.ndarray:
+def fixClockwise2(target_points: np.ndarray) -> np.ndarray:
     return order_points_old(np.array(target_points))
 
 
@@ -483,37 +476,39 @@ def addPointOffsets(points: List, dx: float, dy: float) -> List:
     ]
 
 
-def makeRectVariants(propablyPoints: List, qualityProfile: List = [3, 1, 0]) -> List:
+def makeRectVariants(propably_points: List, quality_profile: List = None) -> List:
     """
     TODO: describe function
     """
-    pointsArr = []
+    if quality_profile is None:
+        quality_profile = [3, 1, 0]
+    points_arr = []
 
-    distanses = findDistances(propablyPoints)
+    distanses = findDistances(propably_points)
 
     if distanses[0]['coef'][2] == 90:
-        pointsArr.append(propablyPoints)
-        return pointsArr
+        points_arr.append(propably_points)
+        return points_arr
 
-    pointCentreLeft = [propablyPoints[0][0] + (propablyPoints[1][0] - propablyPoints[0][0]) / 2,
-                       propablyPoints[0][1] + (propablyPoints[1][1] - propablyPoints[0][1]) / 2]
+    point_centre_left = [propably_points[0][0] + (propably_points[1][0] - propably_points[0][0]) / 2,
+                         propably_points[0][1] + (propably_points[1][1] - propably_points[0][1]) / 2]
 
-    pointBottomLeft = [pointCentreLeft[0], getYByMatrix(distanses[3]["matrix"], pointCentreLeft[0])]
+    point_bottom_left = [point_centre_left[0], getYByMatrix(distanses[3]["matrix"], point_centre_left[0])]
 
-    dx = propablyPoints[0][0] - pointBottomLeft[0]
-    dy = propablyPoints[0][1] - pointBottomLeft[1]
+    dx = propably_points[0][0] - point_bottom_left[0]
+    dy = propably_points[0][1] - point_bottom_left[1]
 
-    steps = qualityProfile[0]
-    stepsPlus = qualityProfile[1]
-    stepsMinus = qualityProfile[2]
+    steps = quality_profile[0]
+    steps_plus = quality_profile[1]
+    steps_minus = quality_profile[2]
 
-    dxStep = dx / steps
-    dyStep = dy / steps
+    dx_step = dx / steps
+    dy_step = dy / steps
 
-    pointsArr = []
-    for i in range(-stepsMinus, steps + stepsPlus + 1):
-        pointsArr.append(addPointOffsets(propablyPoints, i * dxStep, i * dyStep))
-    return pointsArr
+    points_arr = []
+    for i in range(-steps_minus, steps + steps_plus + 1):
+        points_arr.append(addPointOffsets(propably_points, i * dx_step, i * dy_step))
+    return points_arr
 
 
 def normalizePerspectiveImages(images: List[np.ndarray]) -> List[np.ndarray]:
@@ -531,6 +526,19 @@ class NpPointsCraft(object):
     NpPointsCraft Class
     git clone https://github.com/clovaai/CRAFT-pytorch.git
     """
+
+    def __init__(self,
+                 low_text=0.4,
+                 link_threshold=0.7,  # 0.4
+                 text_threshold=0.6,
+                 canvas_size=1280,
+                 mag_ratio=1.5
+                 ):
+        self.low_text = low_text
+        self.link_threshold = link_threshold
+        self.text_threshold = text_threshold
+        self.canvas_size = canvas_size
+        self.mag_ratio = mag_ratio
 
     @classmethod
     def get_classname(cls: object) -> str:
@@ -597,13 +605,17 @@ class NpPointsCraft(object):
             self.refine_net.eval()
             self.is_poly = True
 
-    def detectByImagePath(self, image_path: str, targetBoxes: List[Dict], qualityProfile: List = [1, 0, 0],
-                          debug: bool = False) -> Tuple[List[Dict], Any]:
+    def detectByImagePath(self,
+                          image_path: str,
+                          target_boxes: List[Dict],
+                          qualityProfile: List = None) -> Tuple[List[Dict], Any]:
         """
         TODO: describe method
         """
+        if qualityProfile is None:
+            qualityProfile = [1, 0, 0]
         image = imgproc.loadImage(image_path)
-        for targetBox in targetBoxes:
+        for targetBox in target_boxes:
             x = min(targetBox['x1'], targetBox['x2'])
             w = abs(targetBox['x2'] - targetBox['x1'])
             y = min(targetBox['y1'], targetBox['y2'])
@@ -624,13 +636,14 @@ class NpPointsCraft(object):
                     targetBox['imgParts'] = imgParts
                 else:
                     targetBox['points'] = targetPointsVariants[0]
-        return targetBoxes, image
+        return target_boxes, image
 
-    def detect(self, image: np.ndarray, targetBoxes: List, qualityProfile: List = [1, 0, 0],
-               debug: bool = False) -> List:
+    def detect(self, image: np.ndarray, targetBoxes: List, qualityProfile: List = None) -> List:
         """
         TODO: describe method
         """
+        if qualityProfile is None:
+            qualityProfile = [1, 0, 0]
         all_points = []
         for targetBox in targetBoxes:
             x = int(min(targetBox[0], targetBox[2]))
@@ -658,15 +671,15 @@ class NpPointsCraft(object):
                 ])
         return all_points
 
-    def detectInBbox(self, image: np.ndarray, debug: bool = False):
+    def detectInBbox(self, image: np.ndarray, craft_params={}, debug: bool = False):
         """
         TODO: describe method
         """
-        low_text = 0.4
-        link_threshold = 0.7  # 0.4
-        text_threshold = 0.6
-        canvas_size = 1280
-        mag_ratio = 1.5
+        low_text = craft_params.get('low_text', self.low_text)
+        link_threshold = craft_params.get('link_threshold', self.link_threshold)
+        text_threshold = craft_params.get('text_threshold', self.text_threshold)
+        canvas_size = craft_params.get('canvas_size', self.canvas_size)
+        mag_ratio = craft_params.get('mag_ratio', self.mag_ratio)
 
         t = time.time()
         bboxes, polys, score_text = test_net(self.net, image, text_threshold, link_threshold, low_text,
@@ -705,3 +718,29 @@ class NpPointsCraft(object):
                 print('[INFO] image.shape', image.shape)
             targetPoints = addoptRectToBbox(targetPoints, image.shape, 7, 12, 0, 12)
         return targetPoints
+
+    def detectProbablyMultilineZones(self, image, craft_params=None, debug=False):
+        """
+        TODO: describe method
+        """
+        if craft_params is None:
+            craft_params = {}
+        low_text = craft_params.get('low_text', self.low_text)
+        link_threshold = craft_params.get('link_threshold', self.link_threshold)
+        text_threshold = craft_params.get('text_threshold', self.text_threshold)
+        canvas_size = craft_params.get('canvas_size', self.canvas_size)
+        mag_ratio = craft_params.get('mag_ratio', self.mag_ratio)
+
+        t = time.time()
+        bboxes, polys, score_text = test_net(self.net, image, text_threshold, link_threshold, low_text,
+                                             self.is_cuda, self.is_poly, canvas_size, self.refine_net, mag_ratio)
+        if debug:
+            print("elapsed time : {}s".format(time.time() - t))
+
+        dimensions = []
+        for poly in bboxes:
+            dimensions.append({'dx': distance(poly[0], poly[1]), 'dy': distance(poly[1], poly[2])})
+
+        np_bboxes_idx, garbage_bboxes_idx = split_boxes(bboxes, dimensions)
+
+        return [bboxes[i] for i in np_bboxes_idx]
